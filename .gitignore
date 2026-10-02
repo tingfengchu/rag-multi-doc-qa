@@ -1,0 +1,19 @@
+# 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 本地敏感配置
+.env
+
+# 本地数据库和向量库文件
+chroma_public/
+chroma_private_*/
+
+# 本地测试文件
+error.pdf
+test1.pdf
+*.pdf

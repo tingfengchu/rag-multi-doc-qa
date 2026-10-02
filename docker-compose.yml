@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: rag_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: rag_app
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d  # 首次启动自动执行 001_init.sql
+
+  app:
+    build: .
+    container_name: rag_app
+    restart: always
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    environment:
+      - MYSQL_HOST=db  # 注意这里是 db，不是 localhost，对应 docker 内部网络
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
+    volumes:
+      - ./chroma_public:/app/chroma_public  # 把向量库挂载出来，重启容器数据不丢
