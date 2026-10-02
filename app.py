@@ -113,6 +113,18 @@ with st.sidebar:
     search_scope = st.radio("搜索哪个库？", ["公共库", "私人库"])
     enable_rerank = st.checkbox("启用 Rerank 重排", value=True)
 
+    # 新增：选择重排模型
+    if enable_rerank:
+        rerank_model = st.selectbox(
+            "选择重排模型：",
+            (
+                "轻量级 (MiniLM-L6，秒下秒跑)",
+                "高精度 (BGE-base，约1GB，精度最高)"
+            )
+        )
+    else:
+        rerank_model = None  # 不启用 Rerank 时不需要模型
+
 # ================= 主区：问答 =================
 question = st.text_input("请输入你的问题：", "张嘉亮的专业技能里，关于RAG都有什么描述？")
 
@@ -135,12 +147,19 @@ if st.button("🚀 提交问题") and question:
         else:
             # 3. 检索
             if enable_rerank:
-                retriever = retrieve_service.get_reranked_retriever(vs, splits)
+                # 根据用户选择，映射到实际模型名称
+                if "高精度" in rerank_model:
+                    model_name = "BAAI/bge-reranker-base"
+                else:
+                    model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                
+                retriever = retrieve_service.get_reranked_retriever(vs, splits, model_name=model_name)
             else:
                 retriever = retrieve_service.get_hybrid_retriever(vs, splits)
-            
+
+            # ⚠️ 关键：这行必须跟 if/else 同级别，确保无论是否 Rerank 都会执行检索
             retrieved_docs = retriever.invoke(question)
-            
+
             # 4. 生成回答
             answer = rag_service.generate_answer(question, retrieved_docs)
             

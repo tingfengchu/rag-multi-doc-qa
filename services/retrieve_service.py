@@ -27,18 +27,11 @@ def get_hybrid_retriever(vectorstore, splits, k=10):
     )
     return ensemble_retriever
 
-def get_reranked_retriever(vectorstore, splits):
-    """
-    在混合检索的基础上，加入 Cross-Encoder Rerank。
-    """
+def get_reranked_retriever(vectorstore, splits, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
     ensemble_retriever = get_hybrid_retriever(vectorstore, splits)
-    
-    # 使用轻量级的 cross-encoder 模型进行重排序
-    model = HuggingFaceCrossEncoder(model_name="BAAI/bge-reranker-base")
+    model = HuggingFaceCrossEncoder(model_name=model_name)
     compressor = CrossEncoderReranker(model=model, top_n=3)
-    
-    compression_retriever = ContextualCompressionRetriever(
+    return ContextualCompressionRetriever(
         base_compressor=compressor,
         base_retriever=ensemble_retriever
     )
-    return compression_retriever
