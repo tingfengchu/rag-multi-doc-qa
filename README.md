@@ -153,11 +153,12 @@ python -m venv .venv-eval
 ## ✅ 测试
 
 ```bash
-# 单元测试：纯离线，不依赖任何服务（66 个用例，约 7 秒；bcrypt 故意慢是安全特性）
+# 单元测试：纯离线，不依赖任何服务（119 个用例，约 14 秒；bcrypt 故意慢是安全特性）
 .venv\Scripts\python.exe -m pytest tests/unit -v
 
 # 集成测试：需要 MySQL / ES / Redis / Chroma 起好，且库里已有文档
-# （含「改密码」链路用例：用 pwd_test_<随机> 临时账号自建自删，不会碰真实数据）
+#  - test_auth_password.py / test_api_auth.py：改密码与 API 认证链路（临时账号自建自删）
+#  - test_rag_integration.py：真实 LLM 端到端
 .venv\Scripts\python.exe -m pytest -m integration -v
 
 # RAGAS 端到端评测（真实调 LLM，默认被 pytest.ini 过滤掉）
@@ -174,6 +175,89 @@ python -m venv .venv-eval
 | `scripts/evaluate_ragas.py` | RAGAS 四指标评测 |
 | `scripts/evaluate_rag.py` | 轻量评测（不装 ragas 时的快速冒烟） |
 | `scripts/unlock_files.cmd` | 仅在公司加密机器上需要：把源码转成明文供 `docker build` 读取 |
+
+---
+
+## 🔌 REST API（FastAPI，Phase 1）
+
+Streamlit 版**继续可用**，API 与它**共用同一套业务层**（`services/` / `auth.py` / `utils/`），
+所以两边行为一致，也不会出现"改了一边忘了另一边"。迁移分阶段推进，当前完成 Phase 1（后端接口）。
+
+```bash
+# ⚠️ --workers 1 是硬要求：每个 worker 都会各自加载 embedding / Cross-Encoder(~80MB) / Docling，
+#    多进程 = 内存成倍增长 + 向量库连接重复（个人机、小服务器上只会更慢更抖）
+.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000 --workers 1
+
+# 交互式调试（OpenAPI 文档）
+#   http://127.0.0.1:8000/api/docs
+```
+
+### 端点一览（16 个业务端点 + 2 个基础端点）
+
+| 方法 | 路径 | 说明 | 权限 |
+| --- | --- | --- | --- |
+| POST | `/api/auth/register` | 自助注册（**角色固定 user**，忽略 body 里的 `role`） | 公开 |
+| POST | `/api/auth/login` | 登录，下发 HttpOnly 会话 Cookie | 公开 |
+| POST | `/api/auth/logout` | 登出（服务端吊销会话，重复登出也返回 200） | 公开 |
+| GET | `/api/auth/me` | 当前登录用户 | 登录 |
+| POST | `/api/auth/password` | 改密码（成功后**吊销该用户全部会话**） | 登录 |
+| GET | `/api/files?scope=` | 列出已入库文件 | 登录 + scope |
+| POST | `/api/files/upload` | 上传并同步入库（multipart，≥20MB 拒绝、MD5 去重、失败自动回滚） | 登录 + scope |
+| DELETE | `/api/files/{file_uuid}?scope=` | 删除文件（ES → 向量 → 状态记录） | 登录 + scope |
+| POST | `/api/chat/stream` | **SSE** 流式问答 | 登录 + scope |
+| GET | `/api/history?scope=` | 读取对话历史 | 登录 + scope |
+| DELETE | `/api/history?scope=` | 清空对话历史 | 登录 + scope |
+| POST | `/api/feedback` | 提交 👍/👎 反馈 | 登录 |
+| GET | `/api/feedback/bad-cases` | 最近的差评样本 | admin |
+| GET | `/api/admin/health` | ES / MySQL / Redis / 向量块数自检 | admin |
+| POST | `/api/admin/eval/ragas` | RAGAS 评测（消耗 LLM 额度） | admin |
+| GET | `/api/admin/eval/report?path=` | 下载报告（限定 `evaluation_output/`） | admin |
+| GET | `/api/health` | 存活探针（不碰任何依赖，避免探针压垮服务） | 公开 |
+| GET | `/api/docs` | OpenAPI 交互文档 | 公开 |
+
+### 会话与安全设计
+
+* **HttpOnly Cookie + Redis 不透明 token**，刻意不用 JWT：
+  JWT 无法吊销，而"改密码后旧 token 仍然有效"会让改密码功能形同虚设；
+  存 Redis 可以**即时吊销**（改密码 → 吊销该用户全部会话；登出 → 吊销当前会话）。
+  `SameSite=Lax` 挡跨站 POST；生产 HTTPS 记得把 `SESSION_COOKIE_SECURE=true`。
+* **scope 授权集中在 `api/deps.resolve_scope`**：`public` 读=登录即可、写=仅 admin；
+  `private:<uuid>` 只允许本人（**admin 也不能读他人私人库**）；其它一律 400。
+  这条以前靠 Streamlit 的 radio 天然成立，REST 化后必须显式校验，否则
+  `?scope=private:<别人的 uuid>` 就是一次**不会报错的静默越权**（已用授权矩阵单测钉死）。
+* `rerank_model` 用 `Literal` 白名单：否则客户端能指定任意 HF 仓库名让我们去下载。
+* 报告下载做了路径穿越防护（只允许 `evaluation_output/` 下的文件）。
+* 注册接口**忽略** body 里的 `role`：`create_user` 本身支持 role（脚本建管理员要用），
+  所以"注册只能是普通用户"必须在路由层显式约束，否则谁都能把自己注册成管理员。
+
+### SSE 事件契约（`POST /api/chat/stream`）
+
+| event | data | 时机 |
+| --- | --- | --- |
+| `meta` | `{scope, question, rewritten_question, rewritten, cached?, refused?}` | 开始 / 命中缓存 / 判定拒答 |
+| `token` | `{text}` | 答案增量（每个字/词一帧） |
+| `citations` | `{citations: [{source, page}]}` | 生成结束且非拒答 |
+| `debug` | `{debug_info: [{length, is_parent, preview, rerank_score}]}` | 生成结束且非拒答 |
+| `done` | `{question, rewritten_question, answer, citations, scope, cached, max_score, refused}` | 结束 |
+| `error` | `{message}` | 流中途出错（状态码此时已发出，只能靠事件报错） |
+
+多行答案会被 JSON 转义进**同一帧**——SSE 靠换行分帧，直接拼正文会把一帧拆散，
+前端拼接就错乱。nginx 反代需保留 `X-Accel-Buffering: no`（代码里已带），
+否则"流式"会退化成"转圈很久然后一次吐完"。
+
+### 迁移进度
+
+| 阶段 | 内容 | 状态 |
+| --- | --- | --- |
+| Phase 1 | FastAPI 后端（本文档）+ Streamlit 版并存 | ✅ 已完成并验证 |
+| Phase 2 | React 前端 + nginx 同源反代（同源后 Cookie 不再需要 CORS） | 待开始 |
+| Phase 3 | 异步上传任务表、审计字段补全、多 worker 部署评估 | 待开始 |
+
+> Phase 1 刻意保持**上传同步**（Docling 解析 10~60s）：异步化需要任务表 + 状态查询，
+> 留到 Phase 3，先不把"重试 / 断点续传"这类复杂度提前引入。
+> 另外两个 `st.cache_resource` 调用点（`retrieve_service` / `pdf_service`）已换成
+> `utils.caching.resource_cache`：Streamlit 下走 `st.cache_resource`（行为不变），
+> uvicorn 下走 `lru_cache`——否则模型会被**每个请求重新加载一遍**，接口能通但慢到不可用。
 
 ---
 
@@ -507,6 +591,39 @@ python -m venv .venv-eval
     附带说明：`utils.passwords` 刻意不 import streamlit / MySQL，所以 FastAPI 迁移时
     `api/routers/auth.py` 可直接复用，不必反向依赖 `auth.py`；
     `hash_password` / `verify_password` 仍在 `auth.py` 转出，历史用法（含 `scripts/`）不受影响。
+
+
+### 🔵 第三轮：FastAPI Phase 1（2026-10-12）
+
+23. **REST 化会把"天然成立"的隔离变成"必须显式校验"** —— scope 授权收口
+
+    Streamlit 版把 scope 藏在 `st.radio` 的两个选项里，用户没有输入通道，所以
+    "只能访问 public / 自己的私人库"天生成立。换成 REST 后 `scope` 变成
+    **客户端可任意构造的字符串**，一次漏判就是静默越权：
+    `?scope=private:<别人的 user_uuid>` 能直接列他人私人库、读他人对话历史——
+    不报错、不告警，只是把数据交出去。
+
+    → 新增 `api/deps.resolve_scope` 作为**唯一**收口点（读/写权限分开：
+    普通用户可读 public 但不可写；`private:<uuid>` 只允许本人，**admin 也不行**），
+    配 20 例授权矩阵单测（含 `private:<自己>:<后缀>` 这类拼接后门）。
+
+24. **改密码只换哈希、不吊销会话 = 只做了一半** —— 会话必须可吊销
+
+    刚上线的改密码功能如果配 JWT，被窃取的旧 token 在过期前依然可用，
+    等于"改了密码但攻击者还在屋里"。
+    → 会话改用 **Redis 不透明 token + HttpOnly Cookie**（不用 JWT）：
+    改密码吊销该用户全部会话、登出吊销当前会话；
+    集成测试专门验证"手里揣着旧 Cookie 也必须 401"（证明是服务端吊销，不是删 Cookie）。
+
+25. **两个 `st.cache_resource` 在非 Streamlit 运行时会退化成普通函数**
+
+    `retrieve_service`（Cross-Encoder ~80MB）与 `pdf_service`（Docling 转换器）
+    都用 `st.cache_resource` 做"只加载一次"。迁到 uvicorn 后该装饰器不再生效，
+    变成**每个请求重建一次模型**——接口能通、日志正常，只是慢到不可用，
+    属于最难发现的性能回归。
+    → 迁移前先引入 `utils/caching.resource_cache`（Streamlit 下走
+    `st.cache_resource`，其它运行时走 `lru_cache`），并加源码级回归测试
+    （服务层禁止再出现裸 `@st.cache_resource`）。
 
 
 ### 📌 遗留提示
