@@ -7,7 +7,7 @@ import hashlib
 import uuid
 
 import streamlit as st
-from auth import require_login
+from auth import require_login, change_password
 from utils.ids import new_uuid, build_source
 from utils.logger import logger
 from langchain_core.documents import Document
@@ -58,6 +58,22 @@ with st.sidebar:
         if is_admin:
             redis_service.clear_history(user_uuid, "public")
         st.success("✅ 对话历史已清空")
+
+    # ---- 修改密码 ----
+    # 补上审计里"提示用户改默认密码、但应用根本没有改密码入口"的缺口。
+    # 逻辑全在 auth.change_password（不含任何 st.*），迁移到 FastAPI 后原样复用。
+    with st.expander("🔑 修改密码", expanded=False):
+        with st.form("change_password_form", clear_on_submit=True):
+            pwd_old = st.text_input("当前密码", type="password", key="pwd_old")
+            pwd_new = st.text_input("新密码（≥8 位）", type="password", key="pwd_new")
+            pwd_new_2 = st.text_input("确认新密码", type="password", key="pwd_new_2")
+            pwd_submit = st.form_submit_button("确认修改")
+        if pwd_submit:
+            pwd_ok, pwd_msg = change_password(user_uuid, pwd_old, pwd_new, pwd_new_2)
+            if pwd_ok:
+                st.success("✅ 密码修改成功！下次登录请使用新密码（当前会话继续有效）。")
+            else:
+                st.error(f"❌ {pwd_msg}")
 
     st.session_state["developer_mode"] = st.checkbox(
         "🔧 开发者模式（显示检索调试面板）",

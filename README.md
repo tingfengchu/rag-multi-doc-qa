@@ -45,6 +45,9 @@ docker compose up -d db es redis
 
 浏览器打开 http://localhost:8501 ，用第 4 步创建的账号登录，上传文档后即可提问。
 
+> 🔑 **登录后请先改掉默认密码**：左侧边栏 →「账户 → 🔑 修改密码」。
+> `scripts/create_admin.py` 建的 admin 默认密码是 `ChangeMe_123!`，**务必替换**（以前应用里没有改密码入口，所以那个默认密码一直没被换掉）。
+
 ## 🐳 Docker 一键部署
 
 ```bash
@@ -150,10 +153,11 @@ python -m venv .venv-eval
 ## ✅ 测试
 
 ```bash
-# 单元测试：纯离线，不依赖任何服务（44 个用例，约 1 秒）
+# 单元测试：纯离线，不依赖任何服务（66 个用例，约 7 秒；bcrypt 故意慢是安全特性）
 .venv\Scripts\python.exe -m pytest tests/unit -v
 
 # 集成测试：需要 MySQL / ES / Redis / Chroma 起好，且库里已有文档
+# （含「改密码」链路用例：用 pwd_test_<随机> 临时账号自建自删，不会碰真实数据）
 .venv\Scripts\python.exe -m pytest -m integration -v
 
 # RAGAS 端到端评测（真实调 LLM，默认被 pytest.ini 过滤掉）
@@ -473,6 +477,38 @@ python -m venv .venv-eval
     且不引入新回归的那一步（窗口 3 → 5）。
 
 
+### 🔴 第二轮补充：账户安全（2026-10-12）
+
+22. **一直提示"请尽快登录修改密码"，但应用里根本没有改密码入口 —— 默认密码从未被换过**
+
+    `scripts/create_admin.py` 建号时打印"请尽快登录修改"，但 `app.py` 侧边栏只有
+    「退出登录 / 清空对话历史」，**全仓库没有任何修改密码的代码路径**，
+    所以 `users` 表里那个 admin 至今仍能用默认密码 `ChangeMe_123!` 登录
+    （实测 bcrypt 校验通过，不是猜测）。
+
+    修复（`auth.change_password` + 侧边栏表单）：
+
+    * 新增 `auth.change_password(user_uuid, old, new, confirm)`，与 `create_user` 同为
+      `(bool, 文案)` 约定、文案可直接展示；**必须提供旧密码**（否则会话被劫持
+      就等价于账号被夺走），且新密码不能与旧密码相同（避免"以为改了其实没改"）；
+    * 密码强度规则（≥8 位、≤72 字节）**抽成 `utils.passwords` 单独一份**，注册与改密码共用。
+      规则散在两处必然漂移，"注册有校验、改密码没校验"是最典型的口令漏洞；
+      bcrypt 只吃前 72 字节这件事也一并锁进单测（"拒绝"而不是"静默截断"）；
+    * UI 在侧边栏「账户 → 🔑 修改密码」，`st.form(clear_on_submit=True)` 提交后自动清空输入框；
+    * 被拒绝的路径**一律不写库**，并用集成测试逐条验证（否则会出现"提示失败但密码已经变了"）。
+
+    验证：
+
+    ```bash
+    .venv\Scripts\python.exe -m pytest tests/unit -q          # 66 passed（44 + 新增 22）
+    .venv\Scripts\python.exe -m pytest -m integration -v      # 含改密码 7 例，临时账号自建自删
+    ```
+
+    附带说明：`utils.passwords` 刻意不 import streamlit / MySQL，所以 FastAPI 迁移时
+    `api/routers/auth.py` 可直接复用，不必反向依赖 `auth.py`；
+    `hash_password` / `verify_password` 仍在 `auth.py` 转出，历史用法（含 `scripts/`）不受影响。
+
+
 ### 📌 遗留提示
 
 * ✅ **IK 重建 + 语料对齐已完成（2026-10-12）**：`rag_knowledge` 已 `--drop-index`
@@ -493,6 +529,14 @@ python -m venv .venv-eval
   编成"AI大模型应用公司"（真值是上海飒智智能科技有限公司）；② 模型会在正确内容后
   补写"理由"句，拉低 faithfulness。根治方向是生成侧 Prompt 约束（实体必须逐字来自
   上下文）+ 加权融合（让公司名块进入上下文），需要更大评测集验证后再改。
+* **账户安全（2026-10-12 已补一半）**：自助「修改密码」已上线（侧边栏），但**还没有**
+  「管理员重置他人密码」和「忘记密码」流程；注册 tab 仍是自助开放（`auth.require_login`），
+  对外演示前建议加邀请码或关闭。**admin 的默认密码 `ChangeMe_123!` 建议第一次登录就改掉**
+  ——现在有入口了，别再拖。
+* **账户基线（实测）**：`users` 表只有 1 个账号（`admin` / role=admin / is_active=1）；
+  MySQL root 是 `Lm060205.` 且应用也用它连库（生产建议单独建最小权限账号）；
+  Redis 无密码、ES 未开认证，但都只绑 `127.0.0.1`。`.env` / `rag_config.txt` 均被 gitignore，
+  且 `git log --all -S` 实测这两个真实密钥**从未进过任何提交**，所以无需因仓库泄露而轮换。
 * **中文语料建议把重排模型换成 `BAAI/bge-reranker-base`**：轻量级 MiniLM 是英文模型，
   对中文问句没有区分度（见第 19 条）。回退机制只会"兜住不劣化"，
   想要真正的精排收益必须换模型（前端「检索设置 → 选择重排模型 → 高精度」）。
