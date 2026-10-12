@@ -442,6 +442,31 @@ python -m venv .venv-eval
     → 修复：`TOP_N_FOR_CONTEXT` 由 3 提到 **5**，并把上面这份实测依据写进代码注释；
     该常量同时也是精排区分度的判定窗口（`window=5`）。
 
+    修复前后对比（同一条命令：`python scripts/evaluate_ragas.py --scope public --limit 5`，
+    ragas 0.4.3 + glm-4-flash 当裁判，5 题）：
+
+    | 指标 | 修复前（top-3） | 修复后（top-5） | 门禁 |
+    | --- | --- | --- | --- |
+    | faithfulness 忠实度 | 0.9714 | 0.8500 | ≥ 0.60 ✅ |
+    | answer_relevancy 答案相关性 | **0.4379** ❌ | **0.7182** ✅ | ≥ 0.50 ✅ |
+    | context_precision 上下文精确率 | 0.8000 | 0.7175 | — |
+    | context_recall 上下文召回率 | 0.6000 | **0.8667** | — |
+
+    代价与收益都符合预期：召回 +0.27、精确 −0.08（多两条上下文）、忠实度 −0.12
+    （上下文变长，"没被上下文支撑的句子"更容易出现），但两项硬门禁全部通过。
+
+    **仍存在的两个问题**（已记录，本轮未改）：
+    * 第 4 题「在哪家公司实习」：岗位与时间答对，但**公司名被编造**成
+      "AI大模型应用公司"（真值：上海飒智智能科技有限公司）。原因是公司名所在块
+      RRF 排第 9、没进 top-5，而"实习岗位块"进去了，模型就用岗位名拼了个公司名 ——
+      典型的"上下文部分相关时的局部幻觉"（faithfulness 仍判 1.0，因为这句话
+      在字面上并不与上下文冲突）。
+    * 第 5 题：检索到的上下文完全正确（`context_recall=1.0`），但模型在正确内容后
+      自行补了一句"基于对两种检索方法的性能评估和需求分析"，faithfulness 掉到 0.25。
+
+    这两条属于"生成侧 Prompt 约束 + 融合策略"的范畴（例如要求实体必须逐字来自上下文、
+    或改成加权融合让公司名块进入上下文），需要更大评测集验证，列为后续项。
+
     遗留：等权融合在"中文 + IK BM25"场景下偏向"两路都出现的中等文档"。
     要进一步提升应改成加权融合或"BM25 主排序 + 向量补召回"，
     但那属于排序策略调优，需要更大评测集验证，本轮只做了有实测支撑、
@@ -450,15 +475,37 @@ python -m venv .venv-eval
 
 ### 📌 遗留提示
 
-* ✅ **IK 重建已完成（2026-10-12）**：`rag_knowledge` 已 `--drop-index` 重建，
-  mapping 实际使用 `ik_max_word_analyzer`（`ik_available=True`、`index_uses_ik=True`），
-  4 份文档已重新入库并对齐——ES 198 条（99 父 + 99 子）、Chroma 99 块、
-  `file_dedup` 4 条 success。以前"索引是 standard 分词器"的问题不再存在。
+* ✅ **IK 重建 + 语料对齐已完成（2026-10-12）**：`rag_knowledge` 已 `--drop-index`
+  重建，mapping 实际使用 `ik_max_word_analyzer`（`ik_available=True`、`index_uses_ik=True`）；
+  文档重新入库后与 `evaluation/golden_set.py` 的语料口径对齐为 **3 份**
+  （`1790569531500.pdf` 简历 / 自动驾驶算法与嵌入式具身智能运控 / SAGE 方案）——
+  实测 **Chroma 89 块 / ES 178 条（89 父 + 89 子）/ file_dedup 3 条 success**。
+  多灌的那份「我的简历 (AI应用开发)(3).pdf」是同一份简历的另一版（重复语料，
+  实测两份都含 13783395503 / 实习经历），已按 app 自己的删除链路
+  （Chroma → file_dedup → ES）清理掉，避免污染 context_precision。
+* ✅ **RAGAS 已可运行且有基线分数**（2026-10-12，public 库 3 份文档，ragas 0.4.3 +
+  glm-4-flash 裁判）：`--limit 5` → faithfulness **0.8500** / answer_relevancy
+  **0.7182** / context_precision **0.7175** / context_recall **0.8667**，
+  两项硬门禁（≥0.60 / ≥0.50）全部通过。报告落在 `evaluation_output/`（已 gitignore）。
+  跑完整 23 题：`.venv-eval\Scripts\python.exe scripts\evaluate_ragas.py --scope public`
+  与 `.venv-eval\Scripts\python.exe -m pytest -m ragas -v`。
+* **两个已知残留问题**（详见第 21 条）：① 上下文只含"实习岗位块"时，模型会把公司名
+  编成"AI大模型应用公司"（真值是上海飒智智能科技有限公司）；② 模型会在正确内容后
+  补写"理由"句，拉低 faithfulness。根治方向是生成侧 Prompt 约束（实体必须逐字来自
+  上下文）+ 加权融合（让公司名块进入上下文），需要更大评测集验证后再改。
 * **中文语料建议把重排模型换成 `BAAI/bge-reranker-base`**：轻量级 MiniLM 是英文模型，
   对中文问句没有区分度（见第 19 条）。回退机制只会"兜住不劣化"，
   想要真正的精排收益必须换模型（前端「检索设置 → 选择重排模型 → 高精度」）。
 * `scripts/unlock_files.cmd` 只在这台有透明加密的开发机上需要；换到新电脑（无加密）
   直接 `docker compose up -d --build` 即可。
+* **Docker 演示的向量库要手动对齐**：本地开发（`.venv` 直接跑 `app.py`）用的是项目根
+  目录的 `./chroma_public/`；容器里 `CHROMA_BASE_DIR=/app/chroma_store`、挂载的是
+  `./chroma_store`，也就是容器读 `./chroma_store/chroma_public/`。
+  本次已把本地库复制过去（`robocopy chroma_public chroma_store\chroma_public /E`，
+  逐字节校验一致），所以容器启动后公共库不是空的。换机器或重新灌数据后记得再对齐一次
+  —— ES 与 MySQL 都是共享容器（`es_data` / `mysql_data`），只有 Chroma 是文件级差异。
+* 小提示：ragas 0.4.3 会对 `aevaluate()` 报 `DeprecationWarning`（应用侧兼容层调用的），
+  不影响打分结果；将来升级 ragas 时按官方提示迁到 `@experiment` 即可。
 
 
 
