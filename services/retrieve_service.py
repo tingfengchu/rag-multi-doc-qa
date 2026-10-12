@@ -14,9 +14,20 @@ from services import es_service
 from utils.logger import logger
 from utils.rerank import RERANK_MIN_SPREAD, is_informative, normalize_scores, sigmoid
 
-#: 最终交给生成链路的上下文条数（父块数）。同时决定精排区分度的判定窗口：
-#: 只有"决定输出的这几条"分得开，精排才值得信任（见 utils/rerank.py 的 window 说明）。
-TOP_N_FOR_CONTEXT = 3
+#: 最终交给生成链路的上下文条数（父块数）。
+#:
+#: 为什么是 5 而不是 3（2026-10-12 实测，RAGAS 前 5 题）：
+#:     等权 RRF 有个结构性特点——**只在一个臂命中的文档会被"两个臂都命中"的
+#:     中等文档压过**（BM25 第 1 名 = 1/61 ≈ 0.0164 < 1/61+1/62 ≈ 0.0325）。
+#:     实测第 4/5 题的正确答案块正是这种情况：
+#:         Q5 答案块：BM25 第 1（score 20.72），向量臂 top-10 未命中 → RRF 第 4
+#:         Q4 答案块：BM25 第 2（score  5.83），向量臂 top-10 未命中 → RRF 第 5
+#:     取 top-3 时这两块都被丢掉，模型只能回答"文档中未提供该信息"，
+#:     造成 context_recall=0、answer_relevancy=0。取 top-5 后两者都能进入上下文。
+#:
+#: 同时它也决定精排区分度的判定窗口：只有"决定输出的这几条"分得开，
+#: 精排才值得信任（见 utils/rerank.py 的 window 说明）。
+TOP_N_FOR_CONTEXT = 5
 
 
 @st.cache_resource
