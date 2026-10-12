@@ -150,7 +150,7 @@ python -m venv .venv-eval
 ## ✅ 测试
 
 ```bash
-# 单元测试：纯离线，不依赖任何服务（32 个用例，约 1 秒）
+# 单元测试：纯离线，不依赖任何服务（44 个用例，约 1 秒）
 .venv\Scripts\python.exe -m pytest tests/unit -v
 
 # 集成测试：需要 MySQL / ES / Redis / Chroma 起好，且库里已有文档
@@ -305,12 +305,123 @@ python -m venv .venv-eval
     * `eval_service` 保留对 ragas 0.1/0.2/0.4 三代 API 的兼容层，将来升版本不用改代码。
 
 
+### 🔴 复盘补充：检索正确性（第二轮审计，2026-10-12）
+
+19. **精排用的是英文模型，把中文检索已经排对第 1 的正确答案挤出了 top-3**
+    （Q1 答不出手机号/邮箱、RAGAS `context_recall=0` 的真凶）
+
+    `retrieve_service` 默认 `model_name="cross-encoder/ms-marco-MiniLM-L-6-v2"`，
+    `app.py` 的「检索设置」默认勾选 Rerank 且默认选「轻量级 (MiniLM)」，
+    `eval_service.collect_predictions()` 也是走**默认参数**——也就是说
+    RAGAS 评的就是这条链路（不是评测集的问题）。
+
+    实测（Q1「张嘉亮的手机号和邮箱分别是多少？」，知识库已按 IK 重建）：
+
+    ```
+    BM25  top10 : [1] score=16.75  '## 张嘉亮  13783395503 | zjl20041116@sjtu.edu.cn ...'
+                  [2] score=14.10  （同一父块的另一个子块）
+                  [3..10] 2.27 ~ 5.91          ← IK 生效后区分度极强
+    Chroma top10: 联系方式块排第 8
+    RRF         : 联系方式块 = 1/61 + 1/68 ≈ 0.031，是所有候选里最高的 → 本该排第 1
+
+    enable_rerank=True  （英文 MiniLM）→ 最终 3 条 context 里**没有**联系方式块
+        rerank_score = 0.999823 / 0.999177 / 0.999146（极差 0.0007，完全饱和）
+        has_phone=False has_email=False → 模型只能答"文档中未提供该信息"
+    enable_rerank=False （RRF 顺序）  → 第 1 条就是联系方式块
+        has_phone=True  has_email=True ✅
+    ```
+
+    根因：MS MARCO 的 MiniLM 是**英文** Cross-Encoder，给中文 pair 打分时
+    sigmoid 后全部堆在 0.999x，极差只有 0.0007 —— 所谓"精排"等价于随机打乱，
+    于是把 BM25 第 1、RRF 也是第 1 的正确答案打掉了。
+
+    → 修复：新增 `utils/rerank.py`，把"精排分数有没有区分度"抽成**可离线单测的纯函数**
+    （`is_informative()` / `normalize_scores()` / `RERANK_MIN_SPREAD=0.02`）；
+    `retrieve_service` 在重排前先过闸门：**没有区分度就保留 RRF 顺序**，
+    并打 `rerank_no_discrimination` WARNING + 提示改用中文精排模型，
+    绝不静默让饱和分数覆盖已经正确的排序。
+    补 12 个单测锁死该契约（`tests/unit/test_rerank.py`，合计 44 个用例）。
+    其中 `test_window_ignores_low_scoring_tail` 是**第一版修复漏判**的回归用例：
+    一开始只看全局极差，而 top-10 里混着明显无关的低分文档、整体极差很大，
+    于是判成"精排有效"、修复静默失效（实测结果与修复前逐位相同）。
+    改成只看"决定输出的前 `TOP_N_FOR_CONTEXT`=3 条"的极差才真正生效。
+
+    行为说明：中文语料在前端选「高精度（BGE-base）」才能获得真正的中文精排；
+    继续用轻量级 MiniLM 时会自动退化为"不精排"，不会再劣化检索结果。
+
+    修复后实测（同一条 Q1）：
+
+    ```
+    {"msg": "rerank_no_discrimination", "spread": 0.000677, "model": "...MiniLM-L-6-v2"}
+    ⚠️ ... 已保留 RRF 顺序。中文语料建议改用 BAAI/bge-reranker-base。
+    retrieved_docs=3   context_hit: 13783395503 / zjl20041116
+      [1] '## 张嘉亮  13783395503 | zjl20041116@sjtu.edu.cn ...'
+    A: 张嘉亮的手机号是13783395503，邮箱是zjl20041116@sjtu.edu.cn[1]。   ✅
+    ```
+
+20. **评测环境按文档的装法装出来是坏的：`import ragas` 直接崩（连踩 3 个坑）**
+
+    这可能是本轮最有价值的一条：仓库从上一轮起就写着"RAGAS 评测脚手架"，
+    但 `.venv-eval` 从未建起来过，**RAGAS 一次都没真跑过**，所以下面这个问题一直没暴露。
+
+    * 坑 1：`requirements-eval.txt` 里只写 `ragas`（不锁下限）→ pip 装成 0.3.1，
+      `import ragas` 崩。
+    * 坑 2（**修正本清单上一版的结论**）：这不是 ragas 版本的问题。补上 `ragas>=0.4`
+      后装到 0.4.3（镜像上的最新版），`import ragas` **照样崩** —— 因为 ragas 0.4.3 的
+      `ragas/llms/base.py:12` 依然硬 import `ChatVertexAI`，而该模块在
+      langchain-community ≥0.4 已被删除：
+
+    ```text
+    File "...\ragas\llms\base.py", line 12, in <module>
+      from langchain_community.chat_models.vertexai import ChatVertexAI
+    ModuleNotFoundError: No module named 'langchain_community.chat_models.vertexai'
+    ```
+
+      真正要钉的是 **`langchain-community<0.4`**（0.3.31 里仍有
+      `chat_models/vertexai.py`，实测 `import ragas` → `0.4.3` 通过）。
+    * 坑 3：只降 langchain-community 又会撞上 `langchain 1.x` ——
+      `langchain_community.cross_encoders` 依赖 `langchain.retrievers`，
+      而它在 langchain 1.x 已被删除：
+
+    ```text
+    services.retrieve_service: ModuleNotFoundError: No module named 'langchain.retrievers'
+    ```
+
+      → 评测环境必须**整体收敛到自洽的 0.3.x 栈**；另外 `requirements.txt` 带进来的
+      1.x 遗留包要卸掉：`langchain-classic` 1.0.8 硬依赖 `langchain-core>=1.4.4`，
+      与 core<1 在依赖层直接对撞（ResolutionImpossible）；`langgraph*` 同样要求
+      core>=1.4.x（`pip check` 会报 3 条冲突），而 ragas 0.4.3 的依赖里**根本没有**
+      langgraph。实测执行
+      `pip uninstall -y langchain-classic langgraph langgraph-prebuilt langgraph-checkpoint langgraph-sdk`
+      之后 `pip check` 干净：`No broken requirements found.`
+
+    这些坑的共同表现：`eval_service.ragas_available()` 返回 False、
+    `scripts/evaluate_ragas.py` 以退出码 2 结束（文档承诺的"装完就能评"不成立）。
+
+    → 修复：`requirements-eval.txt` 写死 6 条 0.3.x 钉子 + 两步装法 + 自检命令。
+    最终实测通过的组合（`.venv-eval`）：
+
+    ```text
+    ragas 0.4.3 / datasets 5.1.0
+    langchain 0.3.30 / langchain-community 0.3.31 / langchain-core 0.3.86
+    langchain-openai 0.3.35 / langchain-chroma 0.2.6 / langchain-text-splitters 0.3.11 / openai 1.109.1
+    10 个 services.* 全部 import ok，ragas_available() = True，pip check 干净
+    ```
+
+    **这些降级只发生在 `.venv-eval` 里**：主环境仍是 langchain 1.4.4 +
+    langchain-community 0.4.2 + openai 3.29.0，生成链路完全不受影响 ——
+    这正是"评测依赖必须物理隔离"的实际价值。
+
+
 ### 📌 遗留提示
 
-* `rag_knowledge` 旧索引仍在使用 `standard` 分词器。**装上 IK 后记得**：
-  `python scripts/reset_knowledge_base.py --scope public --yes --drop-index`
-  → 重启应用 → 重新上传文档。在此之前检索质量会低于预期，RAGAS 的
-  `context_recall` 也会偏低。
+* ✅ **IK 重建已完成（2026-10-12）**：`rag_knowledge` 已 `--drop-index` 重建，
+  mapping 实际使用 `ik_max_word_analyzer`（`ik_available=True`、`index_uses_ik=True`），
+  4 份文档已重新入库并对齐——ES 198 条（99 父 + 99 子）、Chroma 99 块、
+  `file_dedup` 4 条 success。以前"索引是 standard 分词器"的问题不再存在。
+* **中文语料建议把重排模型换成 `BAAI/bge-reranker-base`**：轻量级 MiniLM 是英文模型，
+  对中文问句没有区分度（见第 19 条）。回退机制只会"兜住不劣化"，
+  想要真正的精排收益必须换模型（前端「检索设置 → 选择重排模型 → 高精度」）。
 * `scripts/unlock_files.cmd` 只在这台有透明加密的开发机上需要；换到新电脑（无加密）
   直接 `docker compose up -d --build` 即可。
 

@@ -26,11 +26,47 @@
 #       与应用环境物理隔离。
 # ===========================================================================
 #
-# 装法（在项目根目录执行）：
+# 装法（在项目根目录执行，**两步**）：
 #
 #     python -m venv .venv-eval
 #     .venv-eval\Scripts\pip install -r requirements.txt -r requirements-eval.txt
+#     .venv-eval\Scripts\pip uninstall -y langchain-classic langgraph langgraph-prebuilt langgraph-checkpoint langgraph-sdk
 #     .venv-eval\Scripts\python.exe scripts\evaluate_ragas.py --scope public --limit 5
+#
+#   为什么必须多一步（卸掉 1.x 遗留包）：
+#     * `langchain-classic` 1.0.8 硬依赖 `langchain-core>=1.4.4`，与评测环境要求的
+#       `langchain-core<1` **在依赖层直接对撞**（ResolutionImpossible）；
+#     * `langgraph*` 1.x 同样要求 core>=1.4.x（实测 `pip check` 会报 3 条冲突），
+#       而 ragas 0.4.3 的依赖里**根本没有** langgraph；
+#     langchain 0.3.x 自带 classic 链路，这些包在评测环境里都是纯遗留物 →
+#     装完卸掉即可（实测随后 `pip check`：No broken requirements found.）。
+#
+# ⚠️ 评测环境必须把 langchain 栈钉到 0.3.x —— 两条实测硬约束（2026-10-12 逐步复现）
+#
+#   约束 1：ragas 会硬 import langchain_community.chat_models.vertexai
+#       实测 ragas 0.4.3（当前最新）的 ragas/llms/base.py:12 依然写着
+#           from langchain_community.chat_models.vertexai import ChatVertexAI
+#       而该模块在 langchain-community>=0.4 已被删除。所以：
+#           ragas 0.4.3 + langchain-community 0.4.2
+#             -> ModuleNotFoundError: No module named 'langchain_community.chat_models.vertexai'
+#       **只写 ragas>=0.4 不够**（第一版就是这么修的，装完 import 照样崩）；
+#       必须限制 langchain-community<0.4（0.3.31 里仍有 chat_models/vertexai.py）。
+#
+#   约束 2：langchain-community 0.3.x 不能配 langchain 1.x
+#       langchain_community.cross_encoders 依赖 langchain.retrievers，
+#       而 langchain 1.x 已删除该模块，实测报：
+#           ModuleNotFoundError: No module named 'langchain.retrievers'
+#       所以评测环境要整体收敛到自洽的 0.3.x 栈
+#       （langchain / langchain-core / langchain-openai / langchain-chroma /
+#        langchain-text-splitters 一起降级）。
+#
+#   这两次降级**只发生在 .venv-eval 里**：主环境仍是 langchain 1.4.4 +
+#   langchain-community 0.4.2 + openai 3.29.0，生成链路完全不受影响 ——
+#   这正是"评测依赖必须物理隔离"的实际价值。
+#
+# 自检（装完把这两条都跑过，才算环境可用）：
+#     .venv-eval\Scripts\python.exe -c "import ragas; print(ragas.__version__)"
+#     .venv-eval\Scripts\python.exe -c "import services.retrieve_service, services.rag_service, services.eval_service; print('services ok')"
 #
 # 注意：requirements.txt 里**故意没有** ragas / datasets，所以必须两个文件一起装，
 #       这样评测环境里既有应用依赖（检索/生成链路要真跑）又有 ragas。
@@ -41,6 +77,18 @@
 #   * 应用内评测面板给出友好提示
 #   * Docker 镜像只装 requirements.txt，保持精简、SDK 版本可预期
 #
-ragas
+# ---------------------------------------------------------------------------
+# 依赖清单：
+#   前 6 条把 langchain 栈钉在**自洽的 0.3.x 组合**（原因见上面两条硬约束），
+#   它们会盖过 requirements.txt 里那些不锁版本的同名条目。
+#   版本下限都取本地实测通过的组合（2026-10-12）。
+# ---------------------------------------------------------------------------
+langchain>=0.3.30,<0.4
+langchain-community>=0.3.31,<0.4
+langchain-core>=0.3.86,<1
+langchain-openai>=0.3,<1
+langchain-chroma>=0.2,<0.3
+langchain-text-splitters>=0.3,<0.4
+ragas>=0.4
 datasets
 

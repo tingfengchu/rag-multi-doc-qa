@@ -1,5 +1,7 @@
 # 虚拟环境
 .venv/
+# RAGAS 评测专用环境（刻意与主环境物理隔离，见 requirements-eval.txt）
+.venv-eval/
 
 # Python 缓存
 __pycache__/
@@ -27,6 +29,9 @@ chroma_store/
 error.pdf
 test1.pdf
 *.pdf
+# 本地测试用的表格数据（如「A模板信息表样表 工号.xlsx」），不要提交
+*.xlsx
+*.xls
 
 # 明文构建上下文（由 scripts/unlock_files.cmd 生成，绕过公司透明加密）
 _plain_build/
