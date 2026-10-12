@@ -7,6 +7,7 @@ from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharac
 from docling.document_converter import DocumentConverter
 
 from utils.caching import resource_cache
+from utils.logger import logger
 
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
@@ -16,7 +17,9 @@ CHUNK_OVERLAP = 150
 # 等于每个上传请求都重建一次转换器。
 @resource_cache
 def get_docling_converter():
-    print("⏳ 首次加载 Docling 转换器...")
+    # 与 retrieve_service 同理：print 里的 emoji 在 GBK 控制台会抛
+    # UnicodeEncodeError，而这里是"首次上传"路径，异常会毁掉整个上传请求。
+    logger.info("docling_converter_first_load")
     return DocumentConverter()
 
 

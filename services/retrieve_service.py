@@ -33,7 +33,10 @@ TOP_N_FOR_CONTEXT = 5
 
 @resource_cache
 def get_cross_encoder_model(model_name: str):
-    print(f"⏳ 首次加载 Cross-Encoder 模型: {model_name}")
+    # 走 logger 而不是 print：Windows 控制台若是 GBK，print 里的 emoji 会抛
+    # UnicodeEncodeError；本函数在"模型首次加载"路径上，异常会把当前请求整个毁掉
+    # （SSE 侧表现为 event: error，详见 api/main.py 里的说明）。
+    logger.info("cross_encoder_first_load", extra={"model": model_name})
     return HuggingFaceCrossEncoder(model_name=model_name)
 
 

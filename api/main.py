@@ -12,6 +12,7 @@
 在个人机或小服务器上只会更慢更抖。并发交给 FastAPI 的线程池（同步端点）承担。
 """
 from contextlib import asynccontextmanager
+import sys
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +25,30 @@ from utils.logger import logger
 from .routers import admin, auth, chat, feedback, files, history
 
 __version__ = "0.1.0"
+
+
+def _make_std_streams_utf8() -> None:
+    """让标准输出/错误**永远不会因为编码问题抛异常**（进程启动时调一次）。
+
+    为什么必须做：Windows 控制台默认是 GBK(cp936)，任何含 emoji / 制表符的
+    ``print`` 都会抛 ``UnicodeEncodeError``。而这类输出恰好都在**模型首次加载**
+    路径上（transformers 的进度条、``services/retrieve_service.py`` 的 Cross-Encoder、
+    ``services/pdf_service.py`` 的 Docling），异常一旦冒泡进 SSE 生成器就会被
+    兜成 ``event: error``——用户看到的现象是"每次提问都失败"
+    （报错发生在模型被缓存之前，所以每次都重来一遍）。
+
+    关键取舍：只改 ``errors``，**不动 encoding**。
+    强制成 UTF-8 会让本机 GBK 控制台把中文显示成乱码（本项目的日志几乎全是中文），
+    得不偿失；保留控制台自带编码 + ``errors="replace"``，则中文照常可读，
+    只有 emoji / 进度条那种奇特字符退化成 ``?``，而**绝不会**再毁掉一个请求。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="replace")
+
+
+_make_std_streams_utf8()
 
 
 @asynccontextmanager
