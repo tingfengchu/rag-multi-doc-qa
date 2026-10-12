@@ -1,10 +1,9 @@
 from contextlib import contextmanager
-from typing import Optional  # 新增这行
+from typing import Optional  
 from mysql.connector.pooling import MySQLConnectionPool
 from config import settings
 
-_pool: Optional[MySQLConnectionPool] = None  # 把原本的 | None 改成 Optional[...]
-
+_pool: Optional[MySQLConnectionPool] = None 
 def get_pool() -> MySQLConnectionPool:
     global _pool
     if _pool is None:

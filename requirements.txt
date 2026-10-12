@@ -1,1 +1,37 @@
-streamlitmysql-connector-pythonpython-dotenvpydantic-settingsbcryptlangchainlangchain-classiclangchain-communitylangchain-openailangchain-chromachromadbpymupdf4llmjiebarank_bm25sentence-transformerstorchtorchvisionpytest
+streamlit
+mysql-connector-python
+python-dotenv
+pydantic-settings
+bcrypt
+langchain
+langchain-community
+langchain-openai
+langchain-chroma
+langchain-text-splitters
+chromadb
+pymupdf4llm
+jieba
+rank_bm25
+sentence-transformers
+torch
+torchvision
+pytest
+redis
+elasticsearch==8.11.0
+docling==2.135.0
+langchain-classic
+
+# --- Excel 上传路径（services/pdf_service._process_excel 直接 import pandas）---
+# 这几个包以前是 docling 的间接依赖，属于"能跑但没声明"的隐患，
+# 新环境里 docling 一旦调整依赖树就会 ImportError，所以显式声明。
+pandas
+openpyxl
+xlrd
+
+# --- RAGAS 自动评测 ---
+# 故意不放在这里：ragas 的依赖会反过来决定线上生成链路的 SDK 版本
+# （ragas 0.4.x 经 instructor 要求 openai<2，会把 openai 3.x 降级），
+# 而本文件是应用运行时依赖清单，不该被一个评测工具牵着走。
+# 评测依赖单独放 requirements-eval.txt，并装到独立的 .venv-eval 里，
+# 详见该文件顶部注释（含 pip install --dry-run 的实测记录）。
+# Docker 镜像因此保持精简，应用内评测面板会提示"未安装 RAGAS"。

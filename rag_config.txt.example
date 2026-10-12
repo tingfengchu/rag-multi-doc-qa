@@ -1,0 +1,27 @@
+# ===========================================================================
+# rag_config.txt 示例文件
+#   1. 复制为 rag_config.txt：copy rag_config.txt.example rag_config.txt
+#   2. 填入真实值
+#   3. rag_config.txt 已被 .gitignore / .dockerignore 忽略，不会泄露
+#
+# 本地直接跑（python -m streamlit run app.py）时读这个文件；
+# 用 docker compose 跑时，docker-compose.yml 会把同名环境变量注入容器，
+# 环境变量优先级高于本文件，两者写一致即可。
+# ===========================================================================
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=you_mysql_password_here
+MYSQL_DB=rag_app
+
+ZHIPU_API_KEY=your_zhipu_api_key_here
+OPENAI_API_BASE=https://open.bigmodel.cn/api/paas/v4/
+
+ES_HOST=localhost
+ES_PORT=9200
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# 向量库根目录，留空 = 用项目根目录
+# CHROMA_BASE_DIR=

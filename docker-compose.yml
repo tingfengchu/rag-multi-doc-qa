@@ -1,18 +1,69 @@
-version: '3.8'
-
 services:
   db:
-    image: mysql:8.0
+    image: docker.m.daocloud.io/library/mysql:8.0
     container_name: rag_mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_DATABASE: rag_app
+      # 真实密码只写在项目根目录的 .env（已被 .gitignore 忽略），不要硬编码到本文件
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在项目根目录的 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DB:-rag_app}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3306:3306"
     volumes:
       - ./mysql_data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d  # 首次启动自动执行 001_init.sql
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  es:
+    # ---------------------------------------------------------------------
+    # 自建镜像：官方 ES + IK 中文分词插件（见 es/Dockerfile）
+    #
+    # 如果网络拿不到 IK 插件包导致构建失败，可以临时改回官方镜像应急：
+    #   image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    # 此时 services/es_service.py 会自动降级为标准分词器并打印警告
+    # （服务能跑，但中文检索精度下降）。
+    # ---------------------------------------------------------------------
+    build:
+      context: .
+      dockerfile: es/Dockerfile
+      args:
+        ES_VERSION: 8.11.0
+    image: rag_es_ik:8.11.0
+    container_name: rag_es
+    restart: always
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - ./es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7.2-alpine
+    container_name: rag_redis
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ./redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   app:
     build: .
@@ -21,11 +72,34 @@ services:
     ports:
       - "8501:8501"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      es:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - MYSQL_HOST=db  # 注意这里是 db，不是 localhost，对应 docker 内部网络
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
-      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
-      - OPENAI_API_BASE=${OPENAI_API_BASE}
+      # 所有密钥都从 .env 读取（docker compose 会自动加载项目根目录的 .env）
+      - MYSQL_HOST=db
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-root}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?请在项目根目录的 .env 中设置 MYSQL_PASSWORD}
+      - MYSQL_DB=${MYSQL_DB:-rag_app}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY:?请在项目根目录的 .env 中设置 ZHIPU_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://open.bigmodel.cn/api/paas/v4/}
+      - ES_HOST=es
+      - ES_PORT=9200
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      # 向量库统一放在一个挂载卷里，容器重建不丢数据
+      - CHROMA_BASE_DIR=/app/chroma_store
     volumes:
-      - ./chroma_public:/app/chroma_public  # 把向量库挂载出来，重启容器数据不丢
+      # 只挂载这一个目录：所有 chroma_<scope> 子库都在它下面，
+      # 避免以前只挂载 chroma_public、私人库随容器删除而丢失的问题。
+      - ./chroma_store:/app/chroma_store
+      # 缓存 HuggingFace 的 cross-encoder 模型，避免每次重建容器都重新下载
+      - hf_cache:/app/.cache/huggingface
+
+volumes:
+  hf_cache:

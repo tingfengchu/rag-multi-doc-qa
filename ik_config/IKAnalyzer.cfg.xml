@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
+<properties>
+    <comment>IK Analyzer 扩展配置</comment>
+    <!--扩展词典：把领域专有名词加进去，分词就不会被切碎-->
+    <entry key="ext_dict">custom.dic</entry>
+    <!--扩展停用词：这些词不进倒排索引，能显著提高 BM25 信噪比-->
+    <entry key="ext_stopwords">stopword.dic</entry>
+</properties>

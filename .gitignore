@@ -6,14 +6,38 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# 本地敏感配置
+# 本地敏感配置（含真实 API Key / 数据库密码，绝对不要提交）
 .env
+.env.*
+!.env.example
+rag_config.txt
+!rag_config.txt.example
 
 # 本地数据库和向量库文件
+# 命名规则见 services/vector_service.py：chroma_{scope.replace(':','_')}
+#   public            -> chroma_public/
+#   private:<uuid>    -> chroma_private_<uuid>/
+#   容器内统一挂载     -> chroma_store/
 chroma_public/
+chroma_private/
 chroma_private_*/
+chroma_store/
 
 # 本地测试文件
 error.pdf
 test1.pdf
 *.pdf
+
+# 明文构建上下文（由 scripts/unlock_files.cmd 生成，绕过公司透明加密）
+_plain_build/
+_diag/
+
+# 容器数据卷（本地开发用，不要提交）
+mysql_data/
+es_data/
+redis_data/
+
+# RAGAS 评测产物
+evaluation_output/
+*.eval_report.json
+

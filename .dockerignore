@@ -1,0 +1,30 @@
+# 构建应用镜像时不需要进入上下文的东西
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.git
+.gitignore
+
+# 容器数据卷
+mysql_data
+es_data
+redis_data
+chroma_public
+chroma_private*
+chroma_store
+
+# 明文构建上下文 / 诊断目录
+_plain_build
+_diag
+
+# 本地密钥：镜像里不能带真实 API Key，运行时用环境变量注入
+.env
+.env.*
+rag_config.txt
+
+# RAGAS 评测产物
+evaluation_output
+
+# 说明：ik_config/ 故意不排除。
+# Elasticsearch 镜像（es/Dockerfile）构建时需要把自定义词典 COPY 进去。
