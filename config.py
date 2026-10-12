@@ -23,6 +23,23 @@ class Settings(BaseSettings):
     chroma_base_dir: str = ""
     max_upload_mb: int = 20
 
+    # ---- REST API（FastAPI 迁移，Phase 1）----
+    # 全部带默认值：老的 rag_config.txt / .env 不加任何一行也能照常跑起来。
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
+    # 开发期前端（Vite）来源白名单，逗号分隔；生产由 nginx 同源反代，用不到 CORS。
+    api_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # 会话有效期（秒），默认 8 小时；改密码会立刻吊销该用户全部会话（见 api/sessions.py）
+    session_ttl_seconds: int = 8 * 3600
+    session_cookie_name: str = "rag_session"
+    # 生产走 HTTPS 时必须设 True，否则会话 Cookie 会在明文连接里裸奔
+    session_cookie_secure: bool = False
+
+    @property
+    def allowed_origins_list(self) -> list:
+        """把逗号分隔的白名单解析成列表（空串 → 空列表，避免 CORS 配置成 [" " ]）。"""
+        return [o.strip() for o in (self.api_allowed_origins or "").split(",") if o.strip()]
+
     @property
     def chroma_root(self) -> str:
         return self.chroma_base_dir or self.base_dir

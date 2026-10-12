@@ -1,16 +1,17 @@
 """混合检索：ES BM25 + Chroma 向量 ➡️ RRF 融合 ➡️ Cross-Encoder 精排 ➡️ 父块回溯。
 
-说明：这里保留 ``st.cache_resource``，因为 Cross-Encoder 模型（约 80MB）
-只应该加载一次。在非 Streamlit 环境（脚本 / pytest）里 ``st.cache_resource``
-会退化成普通函数并打印一条 warning，功能不受影响。
+说明：Cross-Encoder 模型（约 80MB）只应该加载一次，所以这里用
+``utils.caching.resource_cache`` 而不是裸写 ``st.cache_resource``：后者在 Streamlit 之外
+（uvicorn 跑 FastAPI / 脚本 / pytest）会退化成普通函数，等于"每个请求都重新加载一遍模型"
+——接口能通、日志正常，只是慢到不可用。Streamlit 下行为与改造前完全一致。
 """
 import hashlib
 
-import streamlit as st
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_core.documents import Document
 
 from services import es_service
+from utils.caching import resource_cache
 from utils.logger import logger
 from utils.rerank import RERANK_MIN_SPREAD, is_informative, normalize_scores, sigmoid
 
@@ -30,7 +31,7 @@ from utils.rerank import RERANK_MIN_SPREAD, is_informative, normalize_scores, si
 TOP_N_FOR_CONTEXT = 5
 
 
-@st.cache_resource
+@resource_cache
 def get_cross_encoder_model(model_name: str):
     print(f"⏳ 首次加载 Cross-Encoder 模型: {model_name}")
     return HuggingFaceCrossEncoder(model_name=model_name)

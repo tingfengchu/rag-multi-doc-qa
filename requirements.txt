@@ -35,3 +35,14 @@ xlrd
 # 评测依赖单独放 requirements-eval.txt，并装到独立的 .venv-eval 里，
 # 详见该文件顶部注释（含 pip install --dry-run 的实测记录）。
 # Docker 镜像因此保持精简，应用内评测面板会提示"未安装 RAGAS"。
+
+# --- REST API（FastAPI 迁移，Phase 1）---
+# 实测 `pip install --dry-run fastapi`：只会新增 fastapi 本身（0.143.0），不降级任何现有包——
+# 它的 starlette/pydantic 要求（starlette>=0.46, pydantic>=2.9）环境里都已满足，
+# 且 starlette 1.7.0 本来就是 streamlit 的依赖。
+fastapi
+# 下面两个以前是"环境里有、清单里没写"的隐式依赖，一并显式声明：
+#   uvicorn          → 启动 API 服务（uvicorn api.main:app）
+#   python-multipart → FastAPI 的 UploadFile（文件上传）必需，缺了会在启动时报 missing
+uvicorn
+python-multipart

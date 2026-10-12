@@ -2,15 +2,19 @@ import os
 import tempfile
 import uuid
 import pandas as pd
-import streamlit as st
 from langchain_core.documents import Document
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 from docling.document_converter import DocumentConverter
 
+from utils.caching import resource_cache
+
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 
-@st.cache_resource
+# Docling 转换器（含版面/表格模型）构建一次就很贵，必须进程内复用。
+# 用 resource_cache 而不是 st.cache_resource：FastAPI(uvicorn) 下后者会退化成普通函数，
+# 等于每个上传请求都重建一次转换器。
+@resource_cache
 def get_docling_converter():
     print("⏳ 首次加载 Docling 转换器...")
     return DocumentConverter()
