@@ -20,6 +20,8 @@ from api.deps import PUBLIC_SCOPE, private_scope, resolve_scope
 
 USER = {"user_uuid": "uuid-alice", "username": "alice", "role": "user"}
 ADMIN = {"user_uuid": "uuid-root", "username": "root", "role": "admin"}
+#: 模块 3 新增的中间角色：能写公共库，但进不了管理端。
+AUTHORIZED = {"user_uuid": "uuid-editor", "username": "editor", "role": "authorized_user"}
 
 
 def _resolve(scope, user=USER, write=False):
@@ -43,6 +45,40 @@ class TestPublicScope:
 
     def test_admin_can_write_public(self):
         assert _resolve("public", ADMIN, write=True) == PUBLIC_SCOPE
+
+    def test_authorized_user_can_read_public(self):
+        """模块 3：被授权的 ``authorized_user`` 读公共库与普通用户一致。"""
+        assert _resolve("public", AUTHORIZED) == PUBLIC_SCOPE
+
+    def test_authorized_user_can_write_public(self):
+        """模块 3 的核心：授权后可以写公共库（上传/删除公共文档）。"""
+        assert _resolve("public", AUTHORIZED, write=True) == PUBLIC_SCOPE
+
+
+class TestAuthorizedUserScope:
+    """``authorized_user`` 的边界：**只多拿到"写公共库"这一条能力，别的一律不变**。"""
+
+    def test_can_write_own_private(self):
+        assert (
+            _resolve("private:uuid-editor", AUTHORIZED, write=True) == "private:uuid-editor"
+        )
+
+    def test_cannot_read_others_private(self):
+        """被授权写公共库 ≠ 能翻别人私人库（模块 1 的隐私红线原样保住）。"""
+        assert _resolve("private:uuid-alice", AUTHORIZED) == 403
+
+    def test_cannot_write_others_private(self):
+        assert _resolve("private:uuid-alice", AUTHORIZED, write=True) == 403
+
+    def test_unknown_role_string_grants_nothing(self):
+        """角色值陌生（大小写不同/拼错）时**只当普通用户**：不许"宽容匹配"成已知角色。
+
+        这类 bug 的形态是"把 ``Authorized_User`` 也当成 authorized_user 放行"，
+        属于越权而不是笔误——所以判定必须是精确匹配。
+        """
+        alien = {"user_uuid": "uuid-x", "username": "x", "role": "Authorized_User"}
+
+        assert _resolve("public", alien, write=True) == 403
 
 
 class TestPrivateScope:

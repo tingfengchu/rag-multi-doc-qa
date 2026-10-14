@@ -8,12 +8,29 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from api import errors, sessions
 from api.deps import get_current_user
-from api.schemas import LoginIn, MessageOut, PasswordChangeIn, RegisterIn, UserOut
+from api.schemas import (
+    AuthConfigOut,
+    LoginIn,
+    MessageOut,
+    PasswordChangeIn,
+    RegisterIn,
+    UserOut,
+)
 from auth import authenticate, change_password, create_user
 from config import settings
 from utils.logger import logger
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+
+
+@router.get("/config", response_model=AuthConfigOut, summary="登录页开关（免登录）")
+def auth_config() -> AuthConfigOut:
+    """登录页渲染前需要的公开开关。
+
+    **必须免登录**：登录页本身要调它，要求鉴权就成了死循环。
+    因此这里只允许放"渲染必需的布尔开关"，不放任何内部信息。
+    """
+    return AuthConfigOut(allow_register=settings.allow_register)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -39,12 +56,19 @@ def _clear_session_cookie(response: Response) -> None:
     summary="自助注册",
 )
 def register(payload: RegisterIn) -> UserOut:
-    """自助注册（注册通道保持开放）。
+    """自助注册（受 ``settings.allow_register`` 开关控制，默认关闭）。
 
     **角色固定为 ``user``，绝不接受客户端指定**：否则任何人 POST 一个
     ``{"role": "admin"}`` 就能把自己注册成管理员——``create_user`` 本身是支持
     role 参数的（脚本建管理员要用），所以这个约束必须在路由层显式做。
+
+    开关校验放在**路由层而不是前端**：前端隐藏入口只是体验，藏不住 API；
+    关掉开关时这里必须直接拒，否则"关闭注册"就是个假象（curl 照样能建号）。
     """
+    if not settings.allow_register:
+        logger.warning("register_blocked", extra={"username": payload.username})
+        raise errors.forbidden("自助注册已关闭，请联系管理员开通账号")
+
     ok, result = create_user(payload.username, payload.password, role="user")
     if not ok:
         if "已存在" in result:

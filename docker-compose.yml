@@ -94,10 +94,15 @@ services:
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       # 向量库统一放在一个挂载卷里，容器重建不丢数据
       - CHROMA_BASE_DIR=/app/chroma_store
+      # 上传原件留存目录（文件管理 / 下载接口的落点，见 services/file_store.py）：
+      # 不设的话会留在容器里，重建一次容器"下载原文"就全 404
+      - FILE_STORE_DIR=/app/file_store
     volumes:
       # 只挂载这一个目录：所有 chroma_<scope> 子库都在它下面，
       # 避免以前只挂载 chroma_public、私人库随容器删除而丢失的问题。
       - ./chroma_store:/app/chroma_store
+      # 上传原件：与向量库同理，必须持久化，否则重建容器后原件全丢
+      - ./file_store:/app/file_store
       # 缓存 HuggingFace 的 cross-encoder 模型，避免每次重建容器都重新下载
       - hf_cache:/app/.cache/huggingface
 

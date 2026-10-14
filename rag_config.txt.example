@@ -25,3 +25,13 @@ REDIS_PORT=6379
 
 # 向量库根目录，留空 = 用项目根目录
 # CHROMA_BASE_DIR=
+
+# ---------- 上传原件留存（文件管理 + 下载）----------
+# 上传时把原件留一份到 <FILE_STORE_DIR>/<file_uuid><ext>，下载接口据此找回。
+# 留空 = <项目根目录>/file_store（已 gitignore；Docker 里建议挂到持久化卷）
+# FILE_STORE_DIR=
+# 历史原件兜底目录（逗号分隔，留空 = 项目根目录）。
+# 改造前入库的文件没有留存件，按**文件名精确匹配**去这些目录里找
+# （本机交付环境的原件就放在项目根目录）。
+# FILE_LEGACY_SEARCH_DIRS=
+

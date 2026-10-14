@@ -46,18 +46,32 @@ def add_documents(vectorstore: Chroma, documents):
         try:
             vectorstore.add_documents(batch)
             success_count += len(batch)
-            print(f"✅ 成功入库第 {i // batch_size + 1} 批，包含 {len(batch)} 个块")
+            logger.info(
+                "chroma_add_batch_ok",
+                extra={"batch": i // batch_size + 1, "count": len(batch)},
+            )
         except Exception as e:
-            print(f"❌ 第 {i // batch_size + 1} 批入库失败，尝试逐个排查: {e}")
+            logger.warning(
+                "chroma_add_batch_failed",
+                extra={"batch": i // batch_size + 1, "err": str(e)},
+            )
             for single_doc in batch:
                 try:
                     vectorstore.add_documents([single_doc])
                     success_count += 1
                 except Exception as single_e:
                     fail_count += 1
-                    print(f"  跳过非法块（内容: {single_doc.page_content[:50]}...）: {single_e}")
+                    logger.warning(
+                        "chroma_add_chunk_skipped",
+                        extra={
+                            "preview": single_doc.page_content[:50],
+                            "err": str(single_e),
+                        },
+                    )
 
-    print(f"📊 入库完成：成功 {success_count} 块，失败 {fail_count} 块")
+    logger.info(
+        "chroma_add_done", extra={"success": success_count, "failed": fail_count}
+    )
     if success_count == 0:
         raise ValueError("❌ 所有文档块均入库失败，请检查数据或向量库连接。")
 
@@ -79,8 +93,11 @@ def delete_by_source(vectorstore: Chroma, source: str) -> int:
             logger.info("chroma_delete_no_match", extra={"source": source})
             return 0
         vectorstore.delete(ids=ids)
+        # 这里以前还有一行 print("  ✓ Chroma 向量已删除...")：与上面这行 logger 完全重复，
+        # 而且 print 带 emoji —— 从脚本/worker 调用（GBK 控制台）会抛 UnicodeEncodeError，
+        # 异常发生在"已删向量、还没删状态记录"的中间位置，正好制造出
+        # "列表里还在、却搜不到"的半删文件（模块 3 清理探针残渣时实测踩到）。
         logger.info("chroma_deleted", extra={"source": source, "count": len(ids)})
-        print(f"  ✓ Chroma 向量已删除: {source}（{len(ids)} 个块）")
         return len(ids)
     except Exception as e:
         logger.error("chroma_delete_failed", extra={"source": source, "err": str(e)})

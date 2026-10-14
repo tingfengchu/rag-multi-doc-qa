@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from config import settings
 from db import get_conn
 
 pytestmark = pytest.mark.integration
@@ -19,6 +20,17 @@ pytestmark = pytest.mark.integration
 OLD_PASSWORD = "OldPass_123!"
 NEW_PASSWORD = "NewPass_456!"
 COOKIE_NAME = "rag_session"
+
+
+@pytest.fixture(autouse=True)
+def _enable_register(monkeypatch):
+    """打开注册开关（模块 2.2 起**默认关闭**）。
+
+    本文件测的就是注册链路本身，所以显式打开。用 ``monkeypatch`` 而不是去改
+    ``rag_config.txt``：测试不该依赖（也不该污染）开发者本地的配置文件，
+    跑完自动还原，避免"某次失败把注册开关留在了 true"。
+    """
+    monkeypatch.setattr(settings, "allow_register", True)
 
 
 @pytest.fixture()

@@ -124,10 +124,8 @@ def init_es_index() -> bool:
         "es_index_created",
         extra={"index": INDEX_NAME, "analyzer": "ik_max_word" if use_ik else "standard"},
     )
-    print(
-        f"ES 索引 {INDEX_NAME} 创建成功"
-        f"（分词器：{'ik_max_word' if use_ik else 'standard 降级模式'}）"
-    )
+    # 这里以前还有一行 print("ES 索引 ... 创建成功")：与上面那条 logger.info 完全重复，
+    # 而 print 会把同样的信息越过日志通道直接写 stdout（脚本/worker 下编码不可控）。
     return True
 
 
@@ -219,11 +217,57 @@ def get_parent_chunk(parent_id: str):
         return None
 
 
+def _delete_by_query_stats(res) -> dict:
+    """把 ``delete_by_query`` 的响应规整成 ``{total, deleted, conflicts, failures}``。
+
+    为什么要规整而不是一句 ``res.get("deleted", 0)``：
+    * ``delete_by_query`` 的响应里 ``total``（命中的文档数）才是"应该删掉多少"，
+      ``deleted`` 才是"真的删掉了多少"。两者不等就说明有文档没删掉
+      （版本冲突 / 局部失败），此时**必须告警**——否则调用方只看到
+      "删除成功，共 N 条"，而 ES 里还留着搜得到的残块（表现为"删了还能搜到"），
+      排查时没人会想到是版本冲突。
+    * 响应对象在不同客户端版本里既可能是 ``ObjectApiResponse``（支持 ``.get``），
+      也可能是裸 dict；统一走 ``.body`` 回退，避免因取字段方式不同而静默返回 0
+      （返回 0 的后果更糟：文件状态表会被标记成"已删除"，而向量还在）。
+    """
+    body = getattr(res, "body", None)
+    if not isinstance(body, dict):
+        body = res if isinstance(res, dict) else {}
+
+    def _as_int(value) -> int:
+        # ES 的计数永远是整数；这里再兜一层，防止 None / 字符串把它带进日志与返回值
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "total": _as_int(body.get("total")),
+        "deleted": _as_int(body.get("deleted")),
+        "conflicts": _as_int(body.get("version_conflicts")),
+        "failures": list(body.get("failures") or []),
+    }
+
+
+def _log_delete_result(op: str, stats: dict, **extra) -> int:
+    """按"是否删干净"分级记录，并返回真实删除条数。"""
+    payload = {**extra, **stats}
+    if stats["failures"]:
+        # failures 非空 = 有分片直接报错，这部分文档肯定没删掉
+        logger.error(f"{op}_failed", extra=payload)
+    elif stats["deleted"] != stats["total"] or stats["conflicts"]:
+        logger.warning(f"{op}_incomplete", extra=payload)
+    else:
+        logger.info(op, extra=payload)
+    return stats["deleted"]
+
+
 def delete_by_file_uuid(file_uuid: str, scope: str) -> int:
-    """删除某个文件的所有块（父块 + 子块），返回删除条数。
+    """删除某个文件的所有块（父块 + 子块），返回**真实删除**条数。
 
     refresh=True 让删除立刻可见，否则刚删完还能搜到（表现为"删不掉"）。
-    conflicts="proceed" 避免并发写入触发的 VersionConflict 直接中断删除。
+    conflicts="proceed" 避免并发写入触发的 VersionConflict 直接中断删除
+    （代价是可能留下没删掉的块，所以下面的计数必须如实上报，见 ``_log_delete_result``）。
     """
     res = es.delete_by_query(
         index=INDEX_NAME,
@@ -238,25 +282,25 @@ def delete_by_file_uuid(file_uuid: str, scope: str) -> int:
         refresh=True,
         conflicts="proceed",
     )
-    deleted = res.get("deleted", 0)
-    logger.info(
+    return _log_delete_result(
         "es_deleted_by_file",
-        extra={"file_uuid": file_uuid, "scope": scope, "deleted": deleted},
+        _delete_by_query_stats(res),
+        file_uuid=file_uuid,
+        scope=scope,
     )
-    return deleted
 
 
 def delete_by_scope(scope: str) -> int:
-    """删除某个 scope 下的全部块，返回删除条数（用于重置知识库）。"""
+    """删除某个 scope 下的全部块，返回**真实删除**条数（用于重置知识库）。"""
     res = es.delete_by_query(
         index=INDEX_NAME,
         query={"bool": {"filter": [{"term": {"metadata.scope": scope}}]}},
         refresh=True,
         conflicts="proceed",
     )
-    deleted = res.get("deleted", 0)
-    logger.info("es_deleted_by_scope", extra={"scope": scope, "deleted": deleted})
-    return deleted
+    return _log_delete_result(
+        "es_deleted_by_scope", _delete_by_query_stats(res), scope=scope
+    )
 
 
 def drop_index() -> bool:

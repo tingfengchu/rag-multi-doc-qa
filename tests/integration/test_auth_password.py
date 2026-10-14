@@ -6,6 +6,7 @@
 运行：``.venv\\Scripts\\python.exe -m pytest -m integration -v``
 """
 import uuid
+import warnings
 
 import pytest
 
@@ -33,7 +34,9 @@ def temp_user():
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM users WHERE user_uuid = %s", (user_uuid,))
         except Exception as e:  # pragma: no cover
-            print(f"⚠️ 清理临时账号失败（请手动删除 {username}）：{e}")
+            # 不用 print + emoji：GBK 控制台（cp936）下 emoji 会抛 UnicodeEncodeError，
+            # 掩盖掉真正的断言失败；这条信息属于告警，走 warnings 更合适。
+            warnings.warn(f"清理临时账号失败（请手动删除 {username}）：{e}", stacklevel=2)
 
 
 def _stored_hash(user_uuid: str):

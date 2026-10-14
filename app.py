@@ -40,7 +40,9 @@ if "session_initialized" not in st.session_state:
     if is_admin:
         redis_service.clear_history(user_uuid, "public")
     st.session_state["session_initialized"] = True
-    print(f"🔒 用户 {user['username']} 新会话初始化，历史记录已清空。")
+    # 不用 print + emoji：GBK 控制台（cp936）下 emoji 会抛 UnicodeEncodeError；
+    # Streamlit 侧本来就该走统一日志通道（logger 内部对编码失败是安全的）。
+    logger.info("streamlit_session_init", extra={"user": user["username"]})
 
 st.title("📚 多租户 AI 智能问答系统")
 st.write(f"当前用户：**{user['username']}** · 角色：`{user['role']}`")
@@ -111,9 +113,13 @@ with st.sidebar:
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 0
 
+    # 决策：**暂不支持图片**。``type`` 就是浏览器里那个 ``accept`` 的来源——把 png/jpg/jpeg
+    # 拿掉，用户在选择框里根本挑不到图（streamlit 服务端也会按同一份名单再滤一次）。
+    # 真正兜底的是 API 侧（``api/routers/files.py:_reject_image_upload`` → 400
+    # "图片格式暂不支持上传"）：界面上的限制永远只是"别让用户白点一次"。
     uploaded_file = st.file_uploader(
-        "上传文档（支持 PDF/Word/PPT/Excel/HTML/图片）",
-        type=["pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "html", "md", "png", "jpg", "jpeg"],
+        "上传文档（支持 PDF/Word/PPT/Excel/HTML；暂不支持图片）",
+        type=["pdf", "docx", "doc", "pptx", "ppt", "xlsx", "xls", "html", "md"],
         key=f"uploader_{st.session_state.uploader_key}",
     )
 
@@ -239,7 +245,7 @@ with st.sidebar:
 
     def _on_file_change():
         redis_service.clear_history(user_uuid, current_scope)
-        print(f"🚨 检测到检索范围切换，已自动清空 {current_scope} 的对话历史")
+        logger.info("streamlit_scope_switch_cleared_history", extra={"scope": current_scope})
 
     selected_file_name = st.selectbox(
         "限定检索范围（可选）：",
@@ -296,7 +302,10 @@ if st.button("🚀 提交问题") and question:
 
                 THRESHOLD = 0.5
                 max_score = max((d.metadata.get("rerank_score", 1.0) for d in retrieved_docs), default=0)
-                print(f"🔍 检索命中 {len(retrieved_docs)} 块，最高置信度分数 = {max_score:.3f}")
+                logger.info(
+                    "streamlit_retrieval_hit",
+                    extra={"chunks": len(retrieved_docs), "max_score": round(max_score, 3)},
+                )
 
                 if not retrieved_docs or max_score < THRESHOLD:
                     answer = f"⚠️ 未在知识库中找到足够相关的信息（最高置信度 {max_score:.2f}，低于阈值 {THRESHOLD}）。请尝试换个问法，或补充相关资料。"
@@ -345,7 +354,10 @@ if st.button("🚀 提交问题") and question:
 
                         redis_service.set_cached_answer(
                             scope, rewritten_question, answer, citations, debug_info,
-                            filter_key=selected_file_uuid or "all"
+                            filter_key=selected_file_uuid or "all",
+                            # 与 FastAPI 入口写同一种 payload（两边共用同一个 Redis key）：
+                            # 不存分数的话，这条答案在 Web 端命中缓存时就只能显示"无置信度"。
+                            rerank_score=max_score,
                         )
                         st.toast("⚡ 答案已写入语义缓存", icon="✅")
 

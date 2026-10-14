@@ -111,12 +111,16 @@ def _iter_page_markdown(result):
                 yield page_no, document.export_to_markdown(page_no=page_no)
             return
         except Exception as e:
-            print(f"⚠️ Docling 分页导出失败，回退为整篇导出：{e}")
+            # 走 logger 而不是 print：这两个函数会被脚本/worker 进程直接调用，那时
+            # stdout 可能是 GBK 控制台或重定向文件，print(emoji) 会抛
+            # UnicodeEncodeError（模块 4 实测：'gbk' codec can't encode '\u26a0'），
+            # 异常会把这次上传整个毁掉——而这里本来是"失败也要降级继续"的兜底分支。
+            logger.warning("docling_page_export_failed", extra={"err": str(e)})
 
     try:
         yield 1, document.export_to_markdown()
     except Exception as e:
-        print(f"❌ Docling 导出 Markdown 失败：{e}")
+        logger.warning("docling_markdown_export_failed", extra={"err": str(e)})
 
 
 def _process_with_docling(uploaded_file, owner_uuid, file_uuid, source_name):
@@ -131,7 +135,7 @@ def _process_with_docling(uploaded_file, owner_uuid, file_uuid, source_name):
             converter = get_docling_converter()
             result = converter.convert(tmp_path)
         except Exception as e:
-            print(f"❌ Docling 解析失败：{e}")
+            logger.error("docling_convert_failed", extra={"err": str(e)})
             return []
 
         headers_to_split_on = [("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")]

@@ -33,6 +33,10 @@ test1.pdf
 *.xlsx
 *.xls
 
+# 上传原件留存目录（下载接口的落点，见 services/file_store.py）
+# 内容是用户上传的文档：体积大、且属于数据而非代码
+file_store/
+
 # 明文构建上下文（由 scripts/unlock_files.cmd 生成，绕过公司透明加密）
 _plain_build/
 _diag/
